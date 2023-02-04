@@ -1,0 +1,15 @@
+var yahooFinance = require('yahoo-finance');
+
+export async function getPrice(ticker) {
+    try {
+        let data = await yahooFinance.quote({
+        symbol: ticker,
+        modules: [ 'price' ] // see the docs for the full list
+        }, function (err, quotes) {
+
+        });
+        return data.price.regularMarketPrice;
+    } catch(e) {
+        return -1;
+    }  
+}
