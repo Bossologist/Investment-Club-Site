@@ -1,208 +1,165 @@
-import firebase from "firebase/compat/app";
-import "firebase/compat/firestore";
-import 'firebase/firestore';
-import { getPrice } from 'backend/yahoo-finance.jsw'
-import { initializeApp } from 'firebase/app';
+import { authentication, currentMember } from 'wix-members';
+import { getTeamId, getTeamData, getRankData, trade } from 'backend/firebase.jsw';
+import { getPrice } from 'backend/yahoo-finance.jsw';
+import wixLocation from 'wix-location';
 
-const firebaseConfig = {
-  apiKey: "AIzaSyBiHEJip0aI_LnBBGgMM2ufxv_5MOfDlHo",
-  authDomain: "investment-club-a702f.firebaseapp.com",
-  projectId: "investment-club-a702f",
-  storageBucket: "investment-club-a702f.appspot.com",
-  messagingSenderId: "974519574723",
-  appId: "1:974519574723:web:53107a56881743ef338276",
-  measurementId: "G-RR6N02R821"
-};
+const CONTEST = "test-spring-2023";
 
-firebase.initializeApp(firebaseConfig);
+const formatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+});
 
-let db = firebase.firestore();
+$w.onReady(async function () {
+	//get member + team info
+	const member = await currentMember.getMember();
+	const userId = member._id;
+	const teamId = await getTeamId(userId, CONTEST);
+	
+	//get all team data
+	const team = await getTeamData(teamId, CONTEST);
+	const username = team.name;
+	const port = team.portfolio;
+	const hist = team.history;
+	let bp = team.bp;
+	let cash = team.cash;
+	let val = formatter.format(team.total_val);
 
-export async function getDoc(docRef) {
-    // the use of promise let us resolve the data when the asynchronous call is finished
-    return new Promise(resolve => {
-        docRef.get()
-            .then(function (doc) { 
-                // When the document is retrieved, this function returns the document's data
-                resolve(doc.data());
-            })
-        })
+	//display username
+	$w("#nameText").text = username;
+
+	//load in rankings
+	const rankings = await getRankData(CONTEST);
+	rankings.forEach(team => { team.total_val = formatter.format(team.total_val);});
+
+	//display rankings
+	$w("#rankTable").rows = [];
+	$w("#rankTable").rows = rankings;
+
+	//display port data
+	for (let i = 0; i < port.length; i++) {
+		let cur = port[i];
+		let cur_price = await getPrice(cur.ticker);
+		port[i]["current_price"] = formatter.format(cur_price);
+		port[i]["total_value"] = formatter.format(cur_price * cur.qty);
+		console.log(port[i]);
+	}
+	$w("#portTable").rows = [];
+	$w("#portTable").rows = port;
+
+	$w("#bpText").text = bp;
+	$w("#cashText").text = cash;
+	$w("#pvText").text = val;
+
+	//close position option
+	let repData = [];
+	for (let i = 0; i < port.length; i++) repData.push({"_id": i.toString()});
+	$w("#closeRepeater").data = repData;
+
+	//display history
+	$w("#histTable").rows = [];
+	$w("#histTable").rows = hist;
+})
+
+export async function onTrade(event) {
+	//disable button to prevent double trade
+	$w("#submitButton").disable();
+	$w("#submitButton").label = "Loading...";
+
+	//get member + team data
+	const member = await currentMember.getMember();
+	const userId = member._id;
+	const teamId = await getTeamId(userId, CONTEST);
+
+	//get trade data
+	const action = $w("#bosDropdown").value;
+	let ticker = $w("#tickerInput").value.toUpperCase();
+	const amt = $w("#amtInput").value;
+	const qty = parseFloat(amt);
+	let date = new Date(Date.UTC(1970, 0, 1));
+	date.setSeconds(Date.now()/1000);
+	console.log(date);
+	const price = await getPrice(ticker); //add catch if not valid ticker
+
+	//do some input validation
+	$w("#tickerInput").onCustomValidation( (value, reject) => {if(value != "" && price == -1) reject("Ticker is not valid!");});
+	$w("#tickerInput").onCustomValidation( (value, reject) => {if(value == "") reject("Ticker is missing!");}, false);
+	$w("#tickerInput").onCustomValidation( (value, reject) => {if(price < 0.01) reject("Asset must be worth at least $0.01!");}, false);
+	$w("#amtInput").onCustomValidation( (value, reject) => {if(amt == "") reject("Amount is missing!");});
+	$w("#amtInput").onCustomValidation( (value, reject) => {
+		if(!Number.isInteger(parseFloat(qty)) || parseInt(qty) <= 0) reject("Amount is not a valid integer!");}, false);
+
+	$w("#tickerInput").updateValidityIndication();
+	$w("#amtInput").updateValidityIndication();
+
+	if (!$w('#tickerInput').valid) showInfo(false, $w('#tickerInput').validationMessage);
+	else showInfo($w('#amtInput').valid, $w('#amtInput').validationMessage);
+	
+	if ($w('#amtInput').valid && $w('#tickerInput').valid) {
+		//do trade using backend function (prob will be in pop up window)
+		const tradeData = 
+			{ "action": action,
+			"ticker": ticker,
+			"qty": qty,
+			"date": date,
+			"price": price,
+			"contest": CONTEST }
+		let res = await trade(teamId, tradeData);
+
+		if (res) showInfo(true, "Trade was successful!");
+		else showInfo(false, "Trade was not successful");
+		
+		$w("#tickerInput").value = "";
+		$w("#amtInput").value = "";
+	}
+
+	//enable button again
+	$w("#submitButton").enable();
+	$w("#submitButton").label = "Submit";
 }
 
-export async function addTeam(contest, name, userId, data) {
-    //get data
-    let pwd = data.pwd;
-    
-    const userRef = db.doc("spring2023/Users/users/" + userId);
-    let teamData = {"pwd": pwd, "portfolio": [], "history": [], "total_val": 100000, "cash": 100000, "bp": 100000, "name": name, "users": [userRef] };
+async function showInfo(valid, message) {
+	console.log(message + " " + valid.toString());
+	if (message == "") {
+		$w('#infoGroup').collapse();
+		return;
+	}
 
-    //add team to collection
-    db.collection("spring2023/Contests/contests/" + contest + "/teams")  
-        .add(teamData)
-        .then(function(docRef) {
-            userRef.set( { "team_list": { [contest]: docRef.id } }, { merge: true } );
-        });
+	if (!valid) {
+		$w("#infoBox").style.backgroundColor = "rgba(255,0,0,0.5)";
+	} else {
+		$w("#infoBox").style.backgroundColor = "rgba(0,255,0,0.5)";
+	}
+
+	$w("#infoText").text = message;
+	console.log($w("#infoText").text);
+	$w('#infoGroup').expand();
+	console.log($w("#infoText").collapsed);
 }
 
-export async function addUserToTeam(contest, userId, teamId) {
-    let userRef = db.doc("spring2023/Users/users/" + userId);
-    let teamRef = db.doc("spring2023/Contests/contests/" + contest + "/teams/" + teamId);
-
-    let team = await getDoc(teamRef);
-    console.log(teamRef);
-    let users = team.users;
-    users.push(userRef);
-
-    await userRef.set( { "team_list": { [contest]: teamRef.id } }, { merge: true } );
-    await teamRef.update( { "users": users } )
+export function tradeButton_click(event) {
+	$w("#contestBox").changeState("tradeState");
+}
+export function rankingButton_click(event) {
+	$w("#contestBox").changeState("rankingState");
+}
+export function portfolioButton_click(event) {
+	$w("#contestBox").changeState("portfolioState");
+}
+export function historyButton_click(event) {
+	$w("#contestBox").changeState("historyState");
 }
 
-export async function getTeamId(userId, contest) {
-    let userRef = db.collection("spring2023/Users/users").doc(userId);
-    let user = await getDoc(userRef);
-    try {
-        let teamId = user.team_list[contest];
-        if (teamId === undefined) throw Error;
-        return teamId;
-    } catch(e) {
-        return -1;
-    }
-}
-
-export async function getTeamData(teamId, contest) {
-    let teamRef = db.collection("spring2023/Contests/contests/" + contest + "/teams").doc(teamId);
-    updatePortfolio(teamRef);
-    let team = await getDoc(teamRef);
-    return team;
-}
-
-export async function getRankData(contest) {
-    let teamsRef = db.collection("spring2023/Contests/contests/" + contest +"/teams");
-    let querySnapshot = await teamsRef.orderBy("total_val", "desc").get();
-    let teams = querySnapshot.docs.map(doc => doc.data());
-
-    let ret = [];
-    let ind = 0;
-    teams.forEach(function(doc) {
-        ret.push({"Place": ++ind, "Name": doc.name, "total_val": doc.total_val})
-    })
-    return ret;
-}
-
-export async function updatePortfolio(teamRef, tradeTicker = "") {
-    let team = await getDoc(teamRef);
-    let cash = team.cash;
-    let port = team.portfolio
-
-    //calculate new asset value
-    let total_asset = 0;
-
-    //if trading, get index of ticker if exists
-    let pos = -1;
-
-    //go through port
-    for (let i = 0; i < port.length; i++) {
-        let curr = port[i];
-        let qty = curr.qty;
-        let ticker = curr.ticker;
-        if (ticker == tradeTicker) {pos = i;}
-
-        //get price from api
-        let val = await getPrice(ticker);
-        total_asset += qty*val;
-    }
-
-    //update total port value
-    let new_total = cash + total_asset;
-    teamRef.update({"total_val": new_total});
-    return pos;
-}
-
-export async function trade(teamId, data) {
-    //get data about trade
-    let action = data.action;
-    let contest = data.contest
-    let ticker = data.ticker;
-    let qty = data.qty;
-    let date = data.date;
-    let price = data.price;
-    
-    //get team from user
-    let teamRef = db.collection("spring2023/Contests/contests/" + contest + "/teams").doc(teamId);
-    let team = await getDoc(teamRef);
-
-    //get team data
-    let port = team.portfolio;
-    let cash = team.cash;
-    let bp = team.bp;
-    let hist = team.history;
-
-    //update team's portfolio, dont need to do this to get stock
-    let pos = await updatePortfolio(teamRef, ticker);
-
-    if (action == "Buy") {
-        // if buy back
-        if (pos != -1 && port[pos].qty < 0) {
-            let cqty = -port[pos].qty;
-            qty = Math.min(qty, cqty);
-            bp += qty*price/2;
-            cash -= qty*price;
-
-            if (qty != cqty) port[pos] = {"qty": qty - cqty, "ticker": ticker, "trade_price": price, "date": date};
-            else port.splice(pos, 1);
-        } else {
-            if (qty*price > bp) {
-                qty = Math.floor(bp/price);
-                if (qty == 0) return false; //add to front end
-            }
-
-            bp -= qty*price;
-            cash -= qty*price;
-
-            if (pos == -1) port.push({"qty": qty, "ticker": ticker, "trade_price": price, "date": date});
-            else port[pos] = {"qty": qty + port[pos].qty, "ticker": ticker, "trade_price": price, "date": date}
-        }
-    } else {
-        // selling smth i currently have (not short)
-         if (pos != -1 && port[pos].qty > 0) {
-            let cqty = port[pos].qty;
-            qty = Math.min(qty, cqty);
-            bp += qty*price;
-            cash += qty*price;
-
-            if (qty != cqty) port[pos] = {"qty": cqty - qty, "ticker": ticker, "trade_price": price, "date": date};
-            else port.splice(pos, 1);
-        } else {
-            if (qty*price > bp) {
-                qty = Math.floor(bp/price);
-                if (qty == 0) return false;
-            }
-
-            bp -= qty*price/2;
-            cash += qty*price;
-
-            if (pos == -1) port.push({"qty": -qty, "ticker": ticker, "trade_price": price, "date": date});
-            else port[pos] = {"qty": port[pos].qty -qty, "ticker": ticker, "trade_price": price, "date": date}
-        }
-    }
-    
-    //update data
-    hist.push({"ticker": ticker, "qty": qty, "action": action, "date": date});
-    teamRef.update({"bp": bp, "cash": cash, "portfolio": port, "history": hist});
-    updatePortfolio(teamRef);
-
-    return true;
-}
-
-export async function getTeams(contest) {
-    let teamsRef = db.collection("spring2023/Contests/contests/" + contest + "/teams");
-    let snapshot = await teamsRef.get();
-
-    let ret = [];
-    snapshot.forEach(doc => {
-        let team = doc.data();
-        ret.push({ "teamId": doc.id, "# of People": team.users.length, "Name": team.name, "pwd": team.pwd});
-    })
-
-    return ret;
+export function closeButton_click(event) {
+	const data = $w("#closeRepeater").data;
+	console.log("data: " + data);
+    let clickedItemData = data.find(item => item._id === event.context.itemId);
+	let ind = parseInt(clickedItemData._id);
+    let pos = $w("#portTable").rows[ind];
+	
+	$w("#tickerInput").value = pos.ticker;
+	$w("#amtInput").value = Math.abs(pos.qty).toString();
+	if (pos.qty < 0) $w("#bosDropdown").value = "Buy";
+	else $w("#bosDropdown").value = "Sell";
+	$w("#contestBox").changeState("tradeState");
 }
