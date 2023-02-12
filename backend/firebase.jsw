@@ -30,11 +30,13 @@ firebase.initializeApp(firebaseConfig);
 
 let db = admin.firestore();
 
+//turn number into currency format
 const formatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
 });
 
+//reverse currency format to number
 function deFormat(number) { return parseFloat(number.substring(1).replace(/,/g, ""));}
 
 export async function getDoc(docRef) {
@@ -53,7 +55,7 @@ export async function addTeam(contest, name, userId, data) {
     let pwd = data.pwd;
     
     const userRef = db.doc("spring2023/Users/users/" + userId);
-    let teamData = {"pwd": pwd, "portfolio": [], "history": [], "total_val": 100000, "cash": "$100,000.00", "bp": "$100,000.00", "name": name, "users": [userRef] };
+    let teamData = {"pwd": pwd, "portfolio": {}, "history": [], "cash": "$100,000.00", "bp": "$100,000.00", "name": name, "users": [userRef] };
 
     //add team to collection
     db.collection("spring2023/Contests/contests/" + contest + "/teams")  
@@ -90,14 +92,13 @@ export async function getTeamId(userId, contest) {
 
 export async function getTeamData(teamId, contest) {
     let teamRef = db.collection("spring2023/Contests/contests/" + contest + "/teams").doc(teamId);
-    updatePortfolio(teamRef);
     let team = await getDoc(teamRef);
     return team;
 }
 
 export async function getRankData(contest) {
     let teamsRef = db.collection("spring2023/Contests/contests/" + contest +"/teams");
-    let querySnapshot = await teamsRef.orderBy("total_val", "desc").get();
+    let querySnapshot = await teamsRef.get();
     let teams = querySnapshot.docs.map(doc => doc.data());
 
     let ret = [];
@@ -108,23 +109,18 @@ export async function getRankData(contest) {
     return ret;
 }
 
-export async function updatePortfolio(teamRef, tradeTicker = "") {
-    let team = await getDoc(teamRef);
+export async function getPortVal(team) {
     let cash = deFormat(team.cash);
-    let port = team.portfolio
+    let port = team.portfolio;
 
-    //calculate new asset value
-    let total_asset = 0;
-
-    //if trading, get index of ticker if exists
-    let pos = -1;
+    //convert port to map
+    const portMap = new Map(Object.entries(port));
 
     //go through port
-    for (let i = 0; i < port.length; i++) {
-        let curr = port[i];
+    let total_asset = 0;
+    for (let [ticker, curr] of portMap.entries()) {
+        let curr = port[ticker];
         let qty = curr.qty;
-        let ticker = curr.ticker;
-        if (ticker == tradeTicker) {pos = i;}
 
         //get price from api
         let val = await getPrice(ticker);
@@ -133,8 +129,7 @@ export async function updatePortfolio(teamRef, tradeTicker = "") {
 
     //update total port value
     let new_total = cash + total_asset;
-    teamRef.update({"total_val": new_total});
-    return pos;
+    return new_total;
 }
 
 export async function trade(teamId, data) {
@@ -158,18 +153,17 @@ export async function trade(teamId, data) {
     let hist = team.history;
 
     //update team's portfolio, dont need to do this to get stock
-    let pos = await updatePortfolio(teamRef, ticker);
 
     if (action == "Buy") {
         // if buy back
-        if (pos != -1 && port[pos].qty < 0) {
-            let cqty = -port[pos].qty;
+        if (port[ticker] && port[ticker].qty < 0) {
+            let cqty = -port[ticker].qty;
             qty = Math.min(qty, cqty);
             bp += qty*price/2;
             cash -= qty*price;
 
-            if (qty != cqty) port[pos] = {"qty": qty - cqty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
-            else port.splice(pos, 1);
+            if (qty != cqty) port[ticker] = {"qty": qty - cqty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
+            else delete port[ticker];
         } else {
             if (qty*price > bp) {
                 qty = Math.floor(bp/price);
@@ -179,19 +173,19 @@ export async function trade(teamId, data) {
             bp -= qty*price;
             cash -= qty*price;
 
-            if (pos == -1) port.push({"qty": qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date});
-            else port[pos] = {"qty": qty + port[pos].qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date}
+            if (!port[ticker]) port[ticker] = {"qty": qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
+            else port[ticker] = {"qty": qty + port[ticker].qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date}
         }
     } else {
         // selling smth i currently have (not short)
-         if (pos != -1 && port[pos].qty > 0) {
-            let cqty = port[pos].qty;
+         if (port[ticker] && port[ticker].qty > 0) {
+            let cqty = port[ticker].qty;
             qty = Math.min(qty, cqty);
             bp += qty*price;
             cash += qty*price;
 
-            if (qty != cqty) port[pos] = {"qty": cqty - qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
-            else port.splice(pos, 1);
+            if (qty != cqty) port[ticker] = {"qty": cqty - qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
+            else delete port[ticker];
         } else {
             if (qty*price > bp) {
                 qty = Math.floor(bp/price);
@@ -201,15 +195,14 @@ export async function trade(teamId, data) {
             bp -= qty*price/2;
             cash += qty*price;
 
-            if (pos == -1) port.push({"qty": -qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date});
-            else port[pos] = {"qty": port[pos].qty -qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date}
+            if (!port[ticker]) port[ticker] = {"qty": -qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date};
+            else port[ticker] = {"qty": port[ticker].qty -qty, "ticker": ticker, "trade_price": formatter.format(price), "date": date}
         }
     }
     
     //update data
     hist.push({"ticker": ticker, "qty": qty, "action": action, "date": date});
     teamRef.update({"bp": formatter.format(bp), "cash": formatter.format(cash), "portfolio": port, "history": hist});
-    updatePortfolio(teamRef);
 
     return true;
 }
@@ -221,8 +214,17 @@ export async function getTeams(contest) {
     let ret = [];
     snapshot.forEach(doc => {
         let team = doc.data();
-        ret.push({ "teamId": doc.id, "teamSize": team.users.length, "Name": team.name, "pwd": team.pwd});
+        ret.push({ "teamId": doc.id, "teamSize": team.users.length, "Name": team.name, "pwd": team.pwd, "port": team.port});
     })
 
+    return ret;
+}
+
+export async function getTeamsData(contest) {
+    let teamsRef = db.collection("spring2023/Contests/contests/" + contest + "/teams");
+    let snapshot = await teamsRef.get();
+
+    let ret = [];
+    snapshot.forEach(doc => {ret.push({ "teamId": doc.id, "teamData": doc.data()});})
     return ret;
 }
