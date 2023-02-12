@@ -1,51 +1,80 @@
 import { authentication, currentMember } from 'wix-members';
-import { getTeamId, getTeamData, getRankData, trade } from 'backend/firebase.jsw';
+import { getTeamId, getTeamData, getTeamsData, trade, getPortVal } from 'backend/firebase.jsw';
 import { getPrice } from 'backend/yahoo-finance.jsw';
 import wixLocation from 'wix-location';
 
 const CONTEST = "test-spring-2023";
 
+//turn number into currency format
 const formatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
 });
 
+//reverse currency format to number
+function deFormat(number) { return parseFloat(number.substring(1).replace(/,/g, ""));}
+
 $w.onReady(async function () {
 	//get member + team info
-	const member = await currentMember.getMember();
+	let member = await currentMember.getMember();
 	const userId = member._id;
 	const teamId = await getTeamId(userId, CONTEST);
-	
-	//get all team data
-	const team = await getTeamData(teamId, CONTEST);
-	const username = team.name;
-	const port = team.portfolio;
-	const hist = team.history;
-	let bp = team.bp;
-	let cash = team.cash;
-	let val = formatter.format(team.total_val);
+	if (teamId == -1) wixLocation.to('/contests');
 
-	//display username
-	$w("#nameText").text = username;
+	//load in all the teams
+	const teams = await getTeamsData(CONTEST);
 
-	//load in rankings
-	const rankings = await getRankData(CONTEST);
-	rankings.forEach(team => { team.total_val = formatter.format(team.total_val);});
+	//init curr team data
+	let username = "";
+	let port = {};
+	let hist = [];
+	let bp;
+	let cash;
+	let val = "";
+
+	//compile rankings
+	let rankings = [];
+	for (let curr of teams) {
+		let teamData = curr.teamData;
+		let cur_val = await getPortVal(teamData);
+		cur_val = formatter.format(cur_val);
+
+		if (curr.teamId == teamId) {
+			username = teamData.name;
+			port = teamData.portfolio;
+			hist = teamData.history;
+			bp = teamData.bp;
+			cash = teamData.cash;
+			val = cur_val;
+		}
+
+		rankings.push({"Place": 0, "Name": teamData.name, "total_val": cur_val})
+	}
+	rankings.sort( (a, b) => deFormat(b.total_val) - deFormat(a.total_val));
+	rankings.forEach( (rank, i) => { rank.Place = i + 1 });
 
 	//display rankings
 	$w("#rankTable").rows = [];
 	$w("#rankTable").rows = rankings;
 
-	//display port data
-	for (let i = 0; i < port.length; i++) {
-		let cur = port[i];
+	//display username
+	$w("#nameText").text = username;
+
+	//change port to array
+	let portArray = []
+	for (let ticker in port) {portArray.push(port[ticker]);}
+
+	//process port data
+	for (let i = 0; i < portArray.length; i++) {
+		let cur = portArray[i];
 		let cur_price = await getPrice(cur.ticker);
-		port[i]["current_price"] = formatter.format(cur_price);
-		port[i]["total_value"] = formatter.format(cur_price * cur.qty);
-		console.log(port[i]);
+		portArray[i]["current_price"] = formatter.format(cur_price);
+		portArray[i]["total_value"] = formatter.format(cur_price * cur.qty);
 	}
+
+	//display port
 	$w("#portTable").rows = [];
-	$w("#portTable").rows = port;
+	$w("#portTable").rows = portArray;
 
 	$w("#bpText").text = bp;
 	$w("#cashText").text = cash;
@@ -53,7 +82,7 @@ $w.onReady(async function () {
 
 	//close position option
 	let repData = [];
-	for (let i = 0; i < port.length; i++) repData.push({"_id": i.toString()});
+	for (let i = 0; i < portArray.length; i++) repData.push({"_id": i.toString()});
 	$w("#closeRepeater").data = repData;
 
 	//display history
