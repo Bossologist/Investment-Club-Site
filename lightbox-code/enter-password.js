@@ -26,15 +26,22 @@ $w.onReady(function () {
 	contest = recieved.contest;
 });
 
-export function subPassBut_click(event) {
+export async function subPassBut_click(event) {
+	$w('#subPassBut').disable();
+	$w('#subPassBut').label = "Loading...";
+
 	let inputPass = $w("#passInput").value;
 	let inputHash = hashCode(inputPass);
 
-	console.log(inputHash);
 	if (pass == inputHash) {
-		addUserToTeam(contest, id, teamId);
+		await addUserToTeam(contest, id, teamId);
+		wixWindow.lightbox.close( {"joined": true} );
 	}
-	//do smth if password is wrong
+	else {
+		$w('#incorrectPassText').show();
+		$w('#passInput').value = "";
+	}
 
-	wixLocation.to('/contest');
+	$w('#subPassBut').enable();
+	$w('#subPassBut').label = "Join";
 }
