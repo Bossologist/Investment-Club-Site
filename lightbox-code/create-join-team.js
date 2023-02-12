@@ -1,18 +1,31 @@
-import wixLocation from 'wix-location';
+import { addTeam } from 'backend/firebase.jsw';
+import wixWindow from 'wix-window';
+let contest = "";
+let id;
 
-$w.onReady(function () {
-
-});
-
-/**
-*	Adds an event handler that runs when the element is clicked.
-	[Read more](https://www.wix.com/corvid/reference/$w.ClickableMixin.html#onClick)
-*	 @param {$w.MouseEvent} event
-*/
-export function joinTeam(event) {
-	wixLocation.to("/blank-1");
+function hashCode(str) {
+	if (str == "") return "";
+    let hash = 0;
+    for (let i = 0, len = str.length; i < len; i++) {
+        let chr = str.charCodeAt(i);
+        hash = (hash << 5) - hash + chr;
+        hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
 }
 
-export function createTeam(event) {
-	wixLocation.to("/blank");
+$w.onReady(async function () {
+	let recieved = wixWindow.lightbox.getContext();
+	id = recieved.userId;
+	contest = recieved.contest;
+});
+
+export async function createTeam(event) {
+	let name = $w("#nameInput").value;
+	let pwd = $w("#passwordInput").value;
+	let hash = hashCode(pwd);
+
+	let data = { "pwd": hash };
+	console.log(id, name);
+	await addTeam(contest, name, id, data);
 }
