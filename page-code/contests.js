@@ -20,18 +20,30 @@ $w.onReady(async function () {
 		else $w("#viewContestButton").disable(), $w("#joinContestButton").show();
 	} else {
 		$w('#viewContestButton').disable();
-		$w('#contestStatusText').html = 
-			'<h1 style="color: red; font-size: 20px; font-style: Cormorant Garamond Semi Bold">Not Joined</h1>';
+		$w('#joinContestButton').disable();
+		$w('#logErrText').show();
 		console.log("logged out");
 	}
 });
 
 export async function joinContest(event) {
+	$w('#joinContestButton').disable();
+	$w('#joinContestButton').label = "Loading...";
+
 	session.setItem("contest", testSpring);
+	var curr = await currentMember.getMember();
+	let id = curr._id;
+	local.setItem("id", id);
 	wixWindow.openLightbox("create-join-team");
+
+	$w('#joinContestButton').enable();
+	$w('#joinContestButton').label = "Join";
 }
 
 export async function sendContest(event) {
+	var curr = await currentMember.getMember();
+	let id = curr._id;
+	local.setItem("id", id);
 	$w("#viewContestButton").label = "Loading...";
 	$w("#viewContestButton").collapseIcon();
 	$w("#viewContestButton").disable();
